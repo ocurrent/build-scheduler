@@ -54,6 +54,10 @@ let get_action = function
   | `Obuilder path ->
     Lwt_io.(with_file ~mode:input) path (Lwt_io.read ?count:None) >|= fun spec ->
     Cluster_api.Submission.obuilder_build spec
+  | `Nix drv ->
+    (* TODO support more build types? *)
+    let spec = Cluster_api.Nix_build.Spec.(Build (`Drv drv)) in
+    Lwt.return @@ Cluster_api.Submission.nix_build spec
 
 let submit { submission_path; pool; repository; commits; cache_hint; urgent } spec =
   let src =
@@ -104,6 +108,14 @@ let local_dockerfile =
     ~doc:"Path of the local Dockerfile to submit"
     ~docv:"PATH"
     ["local-dockerfile"]
+
+let local_nix_drv =
+  Arg.required @@
+  Arg.opt Arg.(some file) None @@
+  Arg.info
+    ~doc:"Path of the local .drv to submit"
+    ~docv:"PATH"
+    ["local-drv"]
 
 let context_dockerfile =
   Arg.value @@
@@ -266,7 +278,16 @@ let submit_obuilder =
   Term.(const submit $ submit_options_common $ submit_obuilder_options),
   Term.info "submit-obuilder" ~doc
 
-let cmds = [submit_docker; submit_obuilder]
+let submit_nix_options =
+  let make (path: string) = `Nix path in
+  Term.(pure make $ local_nix_drv)
+
+let submit_nix =
+  let doc = "Submit a Nix build to the scheduler" in
+  Term.(const submit $ submit_options_common $ submit_nix_options),
+  Term.info "submit-nix" ~doc
+
+let cmds = [submit_docker; submit_obuilder; submit_nix]
 
 let default_cmd =
   let doc = "a command-line client for the build-scheduler" in

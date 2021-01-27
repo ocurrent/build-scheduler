@@ -63,6 +63,7 @@ let min_reconnect_time = 10.0   (* Don't try to connect more than once per 10 se
 type job_spec = [ 
   | `Docker of [ `Contents of string | `Path of string ] * Cluster_api.Docker.Spec.options
   | `Obuilder of [ `Contents of string ]
+  | `Nix of Nix_build.Spec.t
 ]
 
 type t = {
@@ -150,6 +151,12 @@ let build ~switch ~log t descr =
         );
       Context.with_build_context t.context ~log descr @@ fun src ->
       t.build ~switch ~log ~src (`Obuilder (`Contents spec))
+    | Nix_build spec ->
+      Log.info (fun f ->
+          f "Got request to build (%s):\n%a" cache_hint Nix_build.Spec.pp spec
+        );
+      Context.with_build_context t.context ~log descr @@ fun src ->
+      t.build ~switch ~log ~src (`Nix spec)
   end
   >|= function
   | Error `Cancelled ->
@@ -337,7 +344,7 @@ let write_to_file ~path data =
   Lwt_io.(with_file ~mode:output) ~flags:Unix.[O_TRUNC; O_CREAT; O_RDWR] path @@ fun ch ->
   Lwt_io.write_from_string_exactly ch data 0 (String.length data)
 
-let default_build ?obuilder ~switch ~log ~src = function
+let default_build ?obuilder ?nix ~switch ~log ~src = function
   | `Docker (dockerfile, options) ->
     let iid_file = Filename.temp_file "build-worker-" ".iid" in
     Lwt.finalize
@@ -371,9 +378,16 @@ let default_build ?obuilder ~switch ~log ~src = function
       )
   | `Obuilder (`Contents spec) ->
     let spec = Obuilder.Spec.t_of_sexp (Sexplib.Sexp.of_string spec) in
-    match obuilder with
+    (match obuilder with
     | None -> Fmt.failwith "This worker is not configured for use with OBuilder!"
     | Some builder -> Obuilder_build.build builder ~switch ~log ~spec ~src_dir:src
+    )
+  | `Nix spec ->
+    (match nix with
+    | None -> Fmt.failwith "This worker is not configured for use with Nix!"
+    | Some nix -> Nix_build.build nix ~log ~switch spec
+    )
+
 
 let metrics = function
   | `Agent ->
@@ -424,7 +438,7 @@ let self_update ~update t =
        Lwt_result.fail (`Msg (Printexc.to_string ex))
     )
 
-let run ?switch ?build ?(allow_push=[]) ?prune_threshold ?obuilder ~update ~capacity ~name ~state_dir registration_service =
+let run ?switch ?build ?(allow_push=[]) ?prune_threshold ?obuilder ?nix ~update ~capacity ~name ~state_dir registration_service =
   begin match prune_threshold with
     | None -> Log.info (fun f -> f "Prune threshold not set. Will not check for low disk-space!")
     | Some frac when frac < 0.0 || frac > 100.0 -> Fmt.invalid_arg "prune_threshold must be in the range 0 to 100"
@@ -434,10 +448,14 @@ let run ?switch ?build ?(allow_push=[]) ?prune_threshold ?obuilder ~update ~capa
     | None -> Lwt.return_none
     | Some config -> Obuilder_build.create ?prune_threshold config >|= Option.some
   end >>= fun obuilder ->
+  begin match nix with
+    | None -> Lwt.return_none
+    | Some config -> Nix_build.create config >|= Option.some
+  end >>= fun nix ->
   let build =
     match build with
     | Some x -> x
-    | None -> default_build ?obuilder
+    | None -> default_build ?obuilder ?nix
   in
   let t = {
     name;
@@ -495,3 +513,4 @@ let run ?switch ?build ?(allow_push=[]) ?prune_threshold ?obuilder ~update ~capa
   | `Crash ex -> Lwt.fail ex
 
 module Obuilder_config = Obuilder_build.Config
+module Nix_config = Nix_build.Config

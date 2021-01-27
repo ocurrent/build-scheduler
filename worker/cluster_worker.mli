@@ -1,12 +1,19 @@
 type job_spec = [ 
   | `Docker of [ `Contents of string | `Path of string ] * Cluster_api.Docker.Spec.options
   | `Obuilder of [ `Contents of string ]
+  | `Nix of Nix_build.Spec.t
 ]
 
 module Obuilder_config : sig
   type t
 
   val v : fast_sync:bool -> [ `Zfs of string | `Btrfs of string ] -> t
+end
+
+module Nix_config : sig
+  type t
+
+  val v : state_dir:string -> cache:(string option) -> t
 end
 
 val run :
@@ -19,6 +26,7 @@ val run :
   ?allow_push:string list ->
   ?prune_threshold:float ->
   ?obuilder:Obuilder_config.t ->
+  ?nix:Nix_config.t ->
   update:(unit -> (unit -> unit Lwt.t) Lwt.t) ->
   capacity:int ->
   name:string ->
